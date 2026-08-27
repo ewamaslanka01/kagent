@@ -41,18 +41,18 @@ type modelRuntime struct {
 
 var _ v2translator.HarnessCompiler = (*Compiler)(nil)
 
-// resolveModel collapses provider-specific translation output into the subset
-// needed to compile a runtime revision.
-func (c *Compiler) resolveModel(ctx context.Context, config *v1alpha3.ModelConfig) (*modelRuntime, error) {
+type ModelCompiler struct{ kube v2translator.Reader }
+
+func NewModelCompiler(kube v2translator.Reader) *ModelCompiler {
+	return &ModelCompiler{kube: kube}
+}
+
+func (c *ModelCompiler) TranslateModel(ctx context.Context, config *v1alpha3.ModelConfig) (*v2translator.ModelConfigTranslation, error) {
 	model, data, err := c.translateModel(ctx, config)
 	if err != nil {
 		return nil, err
 	}
-	return &modelRuntime{
-		Model: model, Environment: data.EnvVars,
-		HasUnsupportedVolumes: len(data.Volumes) > 0 || len(data.VolumeMounts) > 0,
-		data:                  data,
-	}, nil
+	return &v2translator.ModelConfigTranslation{Model: model, Environment: data.EnvVars, Volumes: data.Volumes, VolumeMounts: data.VolumeMounts}, nil
 }
 
 const (
@@ -210,7 +210,7 @@ func addTokenExchangeConfiguration(openai *adk.OpenAI, mdd *modelDeploymentData,
 // resolveFoundryEndpoint returns the Foundry endpoint, preferring the inline
 // value and otherwise resolving it from the referenced ConfigMap (endpointFrom),
 // which lets Azure Service Operator own the account endpoint.
-func (c *Compiler) resolveFoundryEndpoint(ctx context.Context, namespace string, cfg *v1alpha3.FoundryConfig) (string, error) {
+func (c *ModelCompiler) resolveFoundryEndpoint(ctx context.Context, namespace string, cfg *v1alpha3.FoundryConfig) (string, error) {
 	if cfg.Endpoint != "" {
 		return cfg.Endpoint, nil
 	}
@@ -236,7 +236,7 @@ func (c *Compiler) resolveFoundryEndpoint(ctx context.Context, namespace string,
 // are intentionally local rather than calling the legacy translator: v2 can
 // now evolve and eventually replace that code without a compatibility layer.
 // It returns the ADK wire model and its Kubernetes runtime requirements.
-func (c *Compiler) translateModel(ctx context.Context, model *v1alpha3.ModelConfig) (adk.Model, *modelDeploymentData, error) {
+func (c *ModelCompiler) translateModel(ctx context.Context, model *v1alpha3.ModelConfig) (adk.Model, *modelDeploymentData, error) {
 	modelDeploymentData := &modelDeploymentData{}
 
 	// Add TLS configuration if present

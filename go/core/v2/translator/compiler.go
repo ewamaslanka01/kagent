@@ -61,11 +61,12 @@ type HarnessInput struct {
 
 // AgentInput contains resolved Kubernetes inputs for one agent.
 type AgentInput struct {
-	Template    *v1alpha3.AgentTemplate
-	ModelConfig *v1alpha3.ModelConfig
-	Instruction string
-	MCPTools    []ResolvedMCPTool
-	Shared      []AgentInputBinding
+	Template         *v1alpha3.AgentTemplate
+	ModelConfig      *v1alpha3.ModelConfig
+	ModelTranslation *ModelConfigTranslation
+	Instruction      string
+	MCPTools         []ResolvedMCPTool
+	Shared           []AgentInputBinding
 }
 
 // ResolvedMCPTool pairs an exact tool allowlist with its resolved server.
@@ -201,6 +202,10 @@ func (c *Compiler) buildInputs(ctx context.Context, tree *ResolvedTree) (*Harnes
 			return nil, err
 		}
 		input := &AgentInput{Template: template, ModelConfig: model, Instruction: instruction}
+		input.ModelTranslation, err = c.kube.GetModelConfigTranslation(ctx, types.NamespacedName{Namespace: template.Namespace, Name: template.Spec.ModelConfig.Name})
+		if err != nil {
+			return nil, fmt.Errorf("resolve ModelConfig translation %q: %w", template.Spec.ModelConfig.Name, err)
+		}
 		toolNames := make([]string, 0)
 		for _, tool := range template.Spec.Tools {
 			if tool.MCP == nil {

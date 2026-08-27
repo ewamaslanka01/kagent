@@ -113,6 +113,14 @@ func (r testReader) Get(ctx context.Context, key types.NamespacedName, object ru
 	return r.Client.Get(ctx, key, object.(client.Object))
 }
 
+func (r testReader) GetModelConfigTranslation(ctx context.Context, key types.NamespacedName) (*v2translator.ModelConfigTranslation, error) {
+	model := &v1alpha3.ModelConfig{}
+	if err := r.Get(ctx, key, model); err != nil {
+		return nil, err
+	}
+	return kagenttranslator.NewModelCompiler(r).TranslateModel(ctx, model)
+}
+
 type testHarnessCompiler struct{ input *v2translator.HarnessInput }
 
 func (c *testHarnessCompiler) Compile(_ context.Context, input *v2translator.HarnessInput) (*v2translator.Revision, error) {

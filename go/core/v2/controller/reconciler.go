@@ -50,6 +50,7 @@ func newPairReconciliations(
 	pairs krt.Collection[AgentTemplateHarnessPair],
 	agentTemplates krt.Collection[*kagentv1alpha3.AgentTemplate],
 	modelConfigs krt.Collection[*kagentv1alpha3.ModelConfig],
+	modelConfigReconciliations krt.Collection[ModelConfigReconciliation],
 	remoteMCPServers krt.Collection[*kagentv1alpha3.RemoteMCPServer],
 	configMaps krt.Collection[*corev1.ConfigMap],
 	secrets krt.Collection[*corev1.Secret],
@@ -61,7 +62,7 @@ func newPairReconciliations(
 		state := &PairReconciliation{Pair: pair}
 		reader := collectionReader{
 			ctx: ctx, agentTemplates: agentTemplates, modelConfigs: modelConfigs, remoteMCPServers: remoteMCPServers,
-			configMaps: configMaps, secrets: secrets, workerPools: workerPools,
+			configMaps: configMaps, secrets: secrets, workerPools: workerPools, modelConfigReconciliations: modelConfigReconciliations,
 		}
 		revision, err := v2translator.NewCompiler(reader, map[v2translator.HarnessType]v2translator.HarnessCompiler{
 			v2translator.HarnessTypeKagent: kagenttranslator.NewCompiler(reader),

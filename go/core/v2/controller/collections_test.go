@@ -73,9 +73,10 @@ func TestReconciliationCollectionsCompileAndObserveRevision(t *testing.T) {
 		WorkerPools:      krt.NewStaticCollection(nil, []*atev1alpha1.WorkerPool{{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "default"}}}, opts.WithName("WorkerPools")...),
 		ActorTemplates:   krt.NewStaticCollection[*atev1alpha1.ActorTemplate](nil, nil, opts.WithName("ActorTemplates")...),
 	}
+	collections.ModelConfigReconciliations = newModelConfigReconciliations(collections.ModelConfigs, collections.ConfigMaps, collections.Secrets, opts)
 	collections.Pairs = newPairCollection(collections.AgentTemplates, collections.Harnesses, opts)
 	collections.Reconciliations = newPairReconciliations(
-		collections.Pairs, collections.AgentTemplates, collections.ModelConfigs, collections.RemoteMCPServers,
+		collections.Pairs, collections.AgentTemplates, collections.ModelConfigs, collections.ModelConfigReconciliations, collections.RemoteMCPServers,
 		collections.ConfigMaps, collections.Secrets, collections.WorkerPools, collections.ActorTemplates, opts,
 	)
 	collections.AgentTemplateStatuses = newAgentTemplateStatuses(collections.AgentTemplates, collections.Reconciliations, opts)
@@ -142,12 +143,14 @@ func TestReconciliationTracksSharedAgentTemplate(t *testing.T) {
 	harness.Spec.Substrate = kagentv1alpha3.HarnessSubstratePolicy{WorkerPoolRef: corev1.LocalObjectReference{Name: "default"}, SnapshotPolicy: kagentv1alpha3.HarnessSnapshotPolicy{Location: "snapshots"}}
 	templates := krt.NewStaticCollection(nil, []*kagentv1alpha3.AgentTemplate{root, child}, opts.WithName("AgentTemplates")...)
 	pairs := newPairCollection(templates, krt.NewStaticCollection(nil, []*kagentv1alpha3.Harness{harness}, opts.WithName("Harnesses")...), opts)
+	modelConfigs := krt.NewStaticCollection(nil, []*kagentv1alpha3.ModelConfig{{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "model"}, Spec: kagentv1alpha3.ModelConfigSpec{Provider: kagentv1alpha3.ModelProviderOpenAI, Model: "gpt-5"}}}, opts.WithName("ModelConfigs")...)
+	configMaps := krt.NewStaticCollection[*corev1.ConfigMap](nil, nil, opts.WithName("ConfigMaps")...)
+	secrets := krt.NewStaticCollection[*corev1.Secret](nil, nil, opts.WithName("Secrets")...)
 	reconciliations := newPairReconciliations(
 		pairs, templates,
-		krt.NewStaticCollection(nil, []*kagentv1alpha3.ModelConfig{{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "model"}, Spec: kagentv1alpha3.ModelConfigSpec{Provider: kagentv1alpha3.ModelProviderOpenAI, Model: "gpt-5"}}}, opts.WithName("ModelConfigs")...),
+		modelConfigs, newModelConfigReconciliations(modelConfigs, configMaps, secrets, opts),
 		krt.NewStaticCollection[*kagentv1alpha3.RemoteMCPServer](nil, nil, opts.WithName("RemoteMCPServers")...),
-		krt.NewStaticCollection[*corev1.ConfigMap](nil, nil, opts.WithName("ConfigMaps")...),
-		krt.NewStaticCollection[*corev1.Secret](nil, nil, opts.WithName("Secrets")...),
+		configMaps, secrets,
 		krt.NewStaticCollection(nil, []*atev1alpha1.WorkerPool{{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "default"}}}, opts.WithName("WorkerPools")...),
 		krt.NewStaticCollection[*atev1alpha1.ActorTemplate](nil, nil, opts.WithName("ActorTemplates")...), opts,
 	)

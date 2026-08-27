@@ -6,6 +6,7 @@ import (
 
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	kagentv1alpha3 "github.com/kagent-dev/kagent/go/api/v1alpha3"
+	v2translator "github.com/kagent-dev/kagent/go/core/v2/translator"
 	"istio.io/istio/pkg/kube/controllers"
 	"istio.io/istio/pkg/kube/krt"
 	corev1 "k8s.io/api/core/v1"
@@ -18,13 +19,25 @@ import (
 // collectionReader lets the compiler use ordinary typed reads while KRT tracks
 // every object fetched by a transformation as a recomputation dependency.
 type collectionReader struct {
-	ctx              krt.HandlerContext
-	agentTemplates   krt.Collection[*kagentv1alpha3.AgentTemplate]
-	modelConfigs     krt.Collection[*kagentv1alpha3.ModelConfig]
-	remoteMCPServers krt.Collection[*kagentv1alpha3.RemoteMCPServer]
-	configMaps       krt.Collection[*corev1.ConfigMap]
-	secrets          krt.Collection[*corev1.Secret]
-	workerPools      krt.Collection[*atev1alpha1.WorkerPool]
+	ctx                        krt.HandlerContext
+	agentTemplates             krt.Collection[*kagentv1alpha3.AgentTemplate]
+	modelConfigs               krt.Collection[*kagentv1alpha3.ModelConfig]
+	remoteMCPServers           krt.Collection[*kagentv1alpha3.RemoteMCPServer]
+	configMaps                 krt.Collection[*corev1.ConfigMap]
+	secrets                    krt.Collection[*corev1.Secret]
+	workerPools                krt.Collection[*atev1alpha1.WorkerPool]
+	modelConfigReconciliations krt.Collection[ModelConfigReconciliation]
+}
+
+func (r collectionReader) GetModelConfigTranslation(_ context.Context, key types.NamespacedName) (*v2translator.ModelConfigTranslation, error) {
+	state := krt.FetchOne(r.ctx, r.modelConfigReconciliations, krt.FilterObjectName(key))
+	if state == nil {
+		return nil, fmt.Errorf("ModelConfig %s reconciliation does not exist", key)
+	}
+	if state.Translation == nil {
+		return nil, fmt.Errorf("ModelConfig %s translation unavailable. error: %s", key, state.Failure.Message)
+	}
+	return state.Translation, nil
 }
 
 func (r collectionReader) Get(_ context.Context, key types.NamespacedName, object runtime.Object) error {
