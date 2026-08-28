@@ -5,7 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"sort"
+	"slices"
+	"strings"
 
 	kagentv1alpha3 "github.com/kagent-dev/kagent/go/api/v1alpha3"
 	v2translator "github.com/kagent-dev/kagent/go/core/v2/translator"
@@ -13,6 +14,7 @@ import (
 	"istio.io/istio/pkg/kube/krt"
 	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 )
 
@@ -51,7 +53,7 @@ func newModelConfigReconciliations(
 	secrets krt.Collection[*corev1.Secret],
 	opts krt.OptionsBuilder,
 ) krt.StatusCollection[*kagentv1alpha3.ModelConfig, kagentv1alpha3.ModelConfigStatus] {
-	statuses, _ := krt.NewStatusManyCollection(modelConfigs, func(ctx krt.HandlerContext, modelConfig *kagentv1alpha3.ModelConfig) (*kagentv1alpha3.ModelConfigStatus, []ModelConfigReconciliation) {
+	statuses, _ := krt.NewStatusCollection(modelConfigs, func(ctx krt.HandlerContext, modelConfig *kagentv1alpha3.ModelConfig) (*kagentv1alpha3.ModelConfigStatus, *ModelConfigReconciliation) {
 		state := &ModelConfigReconciliation{ModelConfigName: krt.Named{Namespace: modelConfig.Namespace, Name: modelConfig.Name}}
 		reader := collectionReader{ctx: ctx, configMaps: configMaps, secrets: secrets, modelConfigs: modelConfigs}
 		translation, translationErr := kagenttranslator.NewModelCompiler(reader).TranslateModel(context.Background(), modelConfig)
@@ -92,7 +94,31 @@ func newModelConfigReconciliations(
 			}
 		}
 		state.SecretHash = hashModelConfigValues(values)
-		return &kagentv1alpha3.ModelConfigStatus{ObservedGeneration: modelConfig.Generation, SecretHash: state.SecretHash}, nil
+
+		var conditions []metav1.Condition
+		if state.Failure != nil {
+			conditions = append(conditions, metav1.Condition{
+				Type:               kagentv1alpha3.ModelConfigConditionTypeAccepted,
+				Status:             metav1.ConditionFalse,
+				Reason:             state.Failure.Reason,
+				Message:            state.Failure.Message,
+				ObservedGeneration: modelConfig.Generation,
+			})
+		} else {
+			conditions = append(conditions, metav1.Condition{
+				Type:               kagentv1alpha3.ModelConfigConditionTypeAccepted,
+				Status:             metav1.ConditionTrue,
+				Reason:             "Accepted",
+				Message:            "ModelConfig configuration resolved successfully",
+				ObservedGeneration: modelConfig.Generation,
+			})
+		}
+
+		return &kagentv1alpha3.ModelConfigStatus{
+			ObservedGeneration: modelConfig.Generation,
+			SecretHash:         state.SecretHash,
+			Conditions:         conditions,
+		}, state
 	}, opts.WithName("ModelConfigReconciliations")...)
 	return statuses
 }
@@ -103,7 +129,7 @@ type hashValue struct {
 }
 
 func hashModelConfigValues(values []hashValue) string {
-	sort.Slice(values, func(i, j int) bool { return values[i].key < values[j].key })
+	slices.SortFunc(values, func(a, b hashValue) int { return strings.Compare(a.key, b.key) })
 	hash := sha256.New()
 	for _, value := range values {
 		hash.Write([]byte(value.key))
@@ -111,7 +137,7 @@ func hashModelConfigValues(values []hashValue) string {
 		for key := range value.data {
 			keys = append(keys, key)
 		}
-		sort.Strings(keys)
+		slices.Sort(keys)
 		for _, key := range keys {
 			hash.Write([]byte(key))
 			hash.Write(value.data[key])
