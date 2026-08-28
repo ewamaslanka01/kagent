@@ -76,7 +76,7 @@ func TestReconciliationCollectionsCompileAndObserveRevision(t *testing.T) {
 	collections.ModelConfigReconciliations = newModelConfigReconciliations(collections.ModelConfigs, collections.ConfigMaps, collections.Secrets, opts)
 	collections.Pairs = newPairCollection(collections.AgentTemplates, collections.Harnesses, opts)
 	collections.Reconciliations = newPairReconciliations(
-		collections.Pairs, collections.AgentTemplates, collections.ModelConfigs, collections.ModelConfigReconciliations, collections.RemoteMCPServers,
+		collections.Pairs, collections.AgentTemplates, collections.ModelConfigs, collections.RemoteMCPServers,
 		collections.ConfigMaps, collections.Secrets, collections.WorkerPools, collections.ActorTemplates, opts,
 	)
 	collections.AgentTemplateStatuses = newAgentTemplateStatuses(collections.AgentTemplates, collections.Reconciliations, opts)
@@ -148,7 +148,7 @@ func TestReconciliationTracksSharedAgentTemplate(t *testing.T) {
 	secrets := krt.NewStaticCollection[*corev1.Secret](nil, nil, opts.WithName("Secrets")...)
 	reconciliations := newPairReconciliations(
 		pairs, templates,
-		modelConfigs, newModelConfigReconciliations(modelConfigs, configMaps, secrets, opts),
+		modelConfigs,
 		krt.NewStaticCollection[*kagentv1alpha3.RemoteMCPServer](nil, nil, opts.WithName("RemoteMCPServers")...),
 		configMaps, secrets,
 		krt.NewStaticCollection(nil, []*atev1alpha1.WorkerPool{{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "default"}}}, opts.WithName("WorkerPools")...),

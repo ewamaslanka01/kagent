@@ -25,7 +25,7 @@ type Collections struct {
 	ActorTemplates             krt.Collection[*atev1alpha1.ActorTemplate]
 	Pairs                      krt.Collection[AgentTemplateHarnessPair]
 	Reconciliations            krt.Collection[PairReconciliation]
-	ModelConfigReconciliations krt.Collection[ModelConfigReconciliation]
+	ModelConfigReconciliations krt.StatusCollection[*kagentv1alpha3.ModelConfig, kagentv1alpha3.ModelConfigStatus]
 	AgentTemplateStatuses      krt.StatusCollection[*kagentv1alpha3.AgentTemplate, kagentv1alpha3.AgentTemplateStatus]
 }
 
@@ -54,7 +54,7 @@ func NewCollections(client kube.Client, watchNamespaces []string, opts krt.Optio
 	actorTemplates := typedCollection[*atev1alpha1.ActorTemplate](client, watchNamespaces, "ActorTemplates", opts)
 	pairs := newPairCollection(agentTemplates, harnesses, opts)
 	modelConfigReconciliations := newModelConfigReconciliations(modelConfigs, configMaps, secrets, opts)
-	reconciliations := newPairReconciliations(pairs, agentTemplates, modelConfigs, modelConfigReconciliations, remoteMCPServers, configMaps, secrets, workerPools, actorTemplates, opts)
+	reconciliations := newPairReconciliations(pairs, agentTemplates, modelConfigs, remoteMCPServers, configMaps, secrets, workerPools, actorTemplates, opts)
 	statuses := newAgentTemplateStatuses(agentTemplates, reconciliations, opts)
 
 	return Collections{

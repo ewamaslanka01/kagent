@@ -52,9 +52,9 @@ func TestModelConfigReconciliationTracksSecret(t *testing.T) {
 	reconciliations := newModelConfigReconciliations(modelConfigs, configMaps, secrets, opts)
 
 	waitFor(t, func() bool { return len(reconciliations.List()) == 1 })
-	initial := reconciliations.List()[0]
-	if initial.ModelConfigName.Name != "model" || initial.SecretHash == "" || initial.Failure != nil {
-		t.Fatalf("unexpected initial reconciliation: %+v", initial)
+	initial := reconciliations.List()[0].Status
+	if initial.SecretHash == "" {
+		t.Fatalf("unexpected initial status: %+v", initial)
 	}
 
 	secrets.UpdateObject(&corev1.Secret{
@@ -62,10 +62,10 @@ func TestModelConfigReconciliationTracksSecret(t *testing.T) {
 		Data:       map[string][]byte{"key": []byte("after")},
 	})
 	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) && reconciliations.List()[0].SecretHash == initial.SecretHash {
+	for time.Now().Before(deadline) && reconciliations.List()[0].Status.SecretHash == initial.SecretHash {
 		time.Sleep(time.Millisecond)
 	}
-	if reconciliations.List()[0].SecretHash == initial.SecretHash {
+	if reconciliations.List()[0].Status.SecretHash == initial.SecretHash {
 		t.Fatal("ModelConfig reconciliation did not change after Secret update")
 	}
 }

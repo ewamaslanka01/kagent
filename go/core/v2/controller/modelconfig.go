@@ -50,10 +50,10 @@ func newModelConfigReconciliations(
 	configMaps krt.Collection[*corev1.ConfigMap],
 	secrets krt.Collection[*corev1.Secret],
 	opts krt.OptionsBuilder,
-) krt.Collection[ModelConfigReconciliation] {
-	return krt.NewCollection(modelConfigs, func(ctx krt.HandlerContext, modelConfig *kagentv1alpha3.ModelConfig) *ModelConfigReconciliation {
+) krt.StatusCollection[*kagentv1alpha3.ModelConfig, kagentv1alpha3.ModelConfigStatus] {
+	statuses, _ := krt.NewStatusManyCollection(modelConfigs, func(ctx krt.HandlerContext, modelConfig *kagentv1alpha3.ModelConfig) (*kagentv1alpha3.ModelConfigStatus, []ModelConfigReconciliation) {
 		state := &ModelConfigReconciliation{ModelConfigName: krt.Named{Namespace: modelConfig.Namespace, Name: modelConfig.Name}}
-		reader := collectionReader{ctx: ctx, configMaps: configMaps, secrets: secrets}
+		reader := collectionReader{ctx: ctx, configMaps: configMaps, secrets: secrets, modelConfigs: modelConfigs}
 		translation, translationErr := kagenttranslator.NewModelCompiler(reader).TranslateModel(context.Background(), modelConfig)
 		if translationErr != nil {
 			state.Failure = appendModelConfigFailure(nil, "TranslationFailed", translationErr.Error())
@@ -92,8 +92,9 @@ func newModelConfigReconciliations(
 			}
 		}
 		state.SecretHash = hashModelConfigValues(values)
-		return state
+		return &kagentv1alpha3.ModelConfigStatus{ObservedGeneration: modelConfig.Generation, SecretHash: state.SecretHash}, nil
 	}, opts.WithName("ModelConfigReconciliations")...)
+	return statuses
 }
 
 type hashValue struct {
