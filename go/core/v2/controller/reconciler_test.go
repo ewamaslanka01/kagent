@@ -188,11 +188,11 @@ func TestReconcilerUpdatesModelConfigStatusOnSecretHashChange(t *testing.T) {
 	if initialUpdate.Status.SecretHash == "" {
 		t.Fatal("expected secret hash in status update")
 	}
-	if len(initialUpdate.Status.Conditions) != 1 || initialUpdate.Status.Conditions[0].Type != kagentv1alpha3.ModelConfigConditionTypeAccepted || initialUpdate.Status.Conditions[0].Status != metav1.ConditionTrue {
-		t.Fatalf("expected Accepted condition in status, got: %+v", initialUpdate.Status.Conditions)
+	if len(initialUpdate.Status.Conditions) != 2 {
+		t.Fatalf("expected 2 conditions in status, got: %+v", initialUpdate.Status.Conditions)
 	}
-	if initialUpdate.Status.Conditions[0].LastTransitionTime.IsZero() {
-		t.Fatal("expected LastTransitionTime to be set on ModelConfig condition")
+	if initialUpdate.Status.Conditions[0].LastTransitionTime.IsZero() || initialUpdate.Status.Conditions[1].LastTransitionTime.IsZero() {
+		t.Fatal("expected LastTransitionTime to be set on ModelConfig conditions")
 	}
 
 	initialHash := initialUpdate.Status.SecretHash

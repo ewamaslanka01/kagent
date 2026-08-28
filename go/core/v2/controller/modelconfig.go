@@ -23,21 +23,13 @@ type ModelConfigReconciliation struct {
 	// If Translation is nil, Failure is non-nil and describes why the ModelConfig could not be translated.
 	// note that failure may be not nil even if Translation is non-nil.
 	Translation *v2translator.ModelConfigTranslation
-	Failure     *ReconciliationFailure
-	SecretHash  string
 }
 
 func (r ModelConfigReconciliation) Equals(other ModelConfigReconciliation) bool {
 	if r.ModelConfigName != other.ModelConfigName {
 		return false
 	}
-	if r.SecretHash != other.SecretHash {
-		return false
-	}
 	if !apiequality.Semantic.DeepEqual(r.Translation, other.Translation) {
-		return false
-	}
-	if !apiequality.Semantic.DeepEqual(r.Failure, other.Failure) {
 		return false
 	}
 	return true
@@ -57,51 +49,57 @@ func newModelConfigReconciliations(
 		state := &ModelConfigReconciliation{ModelConfigName: krt.Named{Namespace: modelConfig.Namespace, Name: modelConfig.Name}}
 		reader := collectionReader{ctx: ctx, configMaps: configMaps, secrets: secrets, modelConfigs: modelConfigs}
 		translation, translationErr := kagenttranslator.NewModelCompiler(reader).TranslateModel(context.Background(), modelConfig)
+		var acceptanceFailure *ReconciliationFailure
 		if translationErr != nil {
-			state.Failure = appendModelConfigFailure(nil, "TranslationFailed", translationErr.Error())
+			acceptanceFailure = &ReconciliationFailure{Condition: kagentv1alpha3.ModelConfigConditionTypeAccepted, Reason: "TranslationFailed", Message: translationErr.Error()}
 		} else {
 			state.Translation = translation
 		}
+		var resolvedRefsFailure *ReconciliationFailure
 		var values []hashValue
-		addSecret := func(name, reason string) {
+		addSecret := func(name, keyName, notFoundReason, keyNotFoundReason string) {
 			key := types.NamespacedName{Namespace: modelConfig.Namespace, Name: name}
 			secret := krt.FetchOne(ctx, secrets, krt.FilterObjectName(key))
 			if secret == nil {
-				state.Failure = appendModelConfigFailure(state.Failure, reason, fmt.Sprintf("secret %s not found", name))
+				resolvedRefsFailure = appendModelConfigFailure(resolvedRefsFailure, kagentv1alpha3.ModelConfigConditionTypeResolvedRefs, notFoundReason, fmt.Sprintf("secret %s not found", name))
 				return
+			}
+			if keyName != "" {
+				if _, ok := (*secret).Data[keyName]; !ok {
+					resolvedRefsFailure = appendModelConfigFailure(resolvedRefsFailure, kagentv1alpha3.ModelConfigConditionTypeResolvedRefs, keyNotFoundReason, fmt.Sprintf("secret %s does not contain key %q", name, keyName))
+				}
 			}
 			values = append(values, hashValue{key: key.String(), data: (*secret).Data})
 		}
 
 		if modelConfig.Spec.APIKeySecret != "" {
-			addSecret(modelConfig.Spec.APIKeySecret, "APIKeySecretNotFound")
+			addSecret(modelConfig.Spec.APIKeySecret, modelConfig.Spec.APIKeySecretKey, "APIKeySecretNotFound", "APIKeySecretKeyNotFound")
 		}
 		if tls := modelConfig.Spec.TLS; tls != nil && tls.CACertSecretRef != "" {
-			addSecret(tls.CACertSecretRef, "TLSSecretNotFound")
+			addSecret(tls.CACertSecretRef, "", "TLSSecretNotFound", "")
 		}
 		if foundry := modelConfig.Spec.Foundry; foundry != nil && foundry.EndpointFrom != nil {
 			ref := foundry.EndpointFrom
 			key := types.NamespacedName{Namespace: modelConfig.Namespace, Name: ref.Name}
 			configMap := krt.FetchOne(ctx, configMaps, krt.FilterObjectName(key))
 			if configMap == nil {
-				state.Failure = appendModelConfigFailure(state.Failure, "EndpointConfigMapNotFound", fmt.Sprintf("config map %s not found", ref.Name))
+				resolvedRefsFailure = appendModelConfigFailure(resolvedRefsFailure, kagentv1alpha3.ModelConfigConditionTypeResolvedRefs, "EndpointConfigMapNotFound", fmt.Sprintf("config map %s not found", ref.Name))
 			} else {
 				value, ok := (*configMap).Data[ref.Key]
 				if !ok && (ref.Optional == nil || !*ref.Optional) {
-					state.Failure = appendModelConfigFailure(state.Failure, "EndpointConfigMapKeyNotFound", fmt.Sprintf("config map %s does not contain key %q", ref.Name, ref.Key))
+					resolvedRefsFailure = appendModelConfigFailure(resolvedRefsFailure, kagentv1alpha3.ModelConfigConditionTypeResolvedRefs, "EndpointConfigMapKeyNotFound", fmt.Sprintf("config map %s does not contain key %q", ref.Name, ref.Key))
 				}
 				values = append(values, hashValue{key: key.String(), data: map[string][]byte{ref.Key: []byte(value)}})
 			}
 		}
-		state.SecretHash = hashModelConfigValues(values)
 
 		var conditions []metav1.Condition
-		if state.Failure != nil {
+		if acceptanceFailure != nil {
 			conditions = append(conditions, metav1.Condition{
 				Type:               kagentv1alpha3.ModelConfigConditionTypeAccepted,
 				Status:             metav1.ConditionFalse,
-				Reason:             state.Failure.Reason,
-				Message:            state.Failure.Message,
+				Reason:             acceptanceFailure.Reason,
+				Message:            acceptanceFailure.Message,
 				ObservedGeneration: modelConfig.Generation,
 			})
 		} else {
@@ -109,14 +107,32 @@ func newModelConfigReconciliations(
 				Type:               kagentv1alpha3.ModelConfigConditionTypeAccepted,
 				Status:             metav1.ConditionTrue,
 				Reason:             "Accepted",
-				Message:            "ModelConfig configuration resolved successfully",
+				Message:            "ModelConfig configuration accepted",
+				ObservedGeneration: modelConfig.Generation,
+			})
+		}
+
+		if resolvedRefsFailure != nil {
+			conditions = append(conditions, metav1.Condition{
+				Type:               kagentv1alpha3.ModelConfigConditionTypeResolvedRefs,
+				Status:             metav1.ConditionFalse,
+				Reason:             resolvedRefsFailure.Reason,
+				Message:            resolvedRefsFailure.Message,
+				ObservedGeneration: modelConfig.Generation,
+			})
+		} else {
+			conditions = append(conditions, metav1.Condition{
+				Type:               kagentv1alpha3.ModelConfigConditionTypeResolvedRefs,
+				Status:             metav1.ConditionTrue,
+				Reason:             "Resolved",
+				Message:            "All referenced secrets and config maps resolved",
 				ObservedGeneration: modelConfig.Generation,
 			})
 		}
 
 		return &kagentv1alpha3.ModelConfigStatus{
 			ObservedGeneration: modelConfig.Generation,
-			SecretHash:         state.SecretHash,
+			SecretHash:         hashModelConfigValues(values),
 			Conditions:         conditions,
 		}, state
 	}, opts.WithName("ModelConfigReconciliations")...)
@@ -146,9 +162,9 @@ func hashModelConfigValues(values []hashValue) string {
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
-func appendModelConfigFailure(current *ReconciliationFailure, reason, message string) *ReconciliationFailure {
+func appendModelConfigFailure(current *ReconciliationFailure, condition, reason, message string) *ReconciliationFailure {
 	if current != nil {
 		return current
 	}
-	return &ReconciliationFailure{Condition: kagentv1alpha3.ModelConfigConditionTypeAccepted, Reason: reason, Message: message}
+	return &ReconciliationFailure{Condition: condition, Reason: reason, Message: message}
 }
