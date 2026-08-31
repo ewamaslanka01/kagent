@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kagent-dev/kagent/go/api/adk"
 	kagentv1alpha3 "github.com/kagent-dev/kagent/go/api/v1alpha3"
 	v2translator "github.com/kagent-dev/kagent/go/core/v2/translator"
 	"istio.io/istio/pkg/kube/krt"
@@ -14,19 +13,18 @@ import (
 )
 
 func TestModelConfigReconciliationEquals(t *testing.T) {
-	model := &adk.OpenAI{BaseModel: adk.BaseModel{Model: "gpt-5"}}
 	left := ModelConfigReconciliation{
 		ModelConfigName: krt.Named{Namespace: "team-a", Name: "model"},
-		Translation:     &v2translator.ModelConfigTranslation{Model: model},
+		Translation:     &v2translator.ResolvedModelConfig{Config: &kagentv1alpha3.ModelConfig{Spec: kagentv1alpha3.ModelConfigSpec{Model: "gpt-5"}}},
 	}
 	right := ModelConfigReconciliation{
 		ModelConfigName: krt.Named{Namespace: "team-a", Name: "model"},
-		Translation:     &v2translator.ModelConfigTranslation{Model: model},
+		Translation:     &v2translator.ResolvedModelConfig{Config: &kagentv1alpha3.ModelConfig{Spec: kagentv1alpha3.ModelConfigSpec{Model: "gpt-5"}}},
 	}
 	if !krt.Equal(left, right) {
 		t.Fatal("equal reconciliations were not considered equal")
 	}
-	left.Translation = &v2translator.ModelConfigTranslation{Model: &adk.OpenAI{BaseModel: adk.BaseModel{Model: "gpt-4"}}}
+	left.Translation = &v2translator.ResolvedModelConfig{Config: &kagentv1alpha3.ModelConfig{Spec: kagentv1alpha3.ModelConfigSpec{Model: "gpt-4"}}}
 	if krt.Equal(left, right) {
 		t.Fatal("different translations were considered equal")
 	}

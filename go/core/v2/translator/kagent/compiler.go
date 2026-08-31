@@ -124,14 +124,21 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 }
 
 func (c *Compiler) compileAgent(ctx context.Context, input *v2translator.AgentInput) (*compiledAgent, error) {
-	if input.ModelTranslation == nil {
-		return nil, fmt.Errorf("ModelConfig %q translation is required", input.ModelConfig.Name)
+	if input.ResolvedModelConfig == nil {
+		return nil, fmt.Errorf("resolved ModelConfig is required")
 	}
-	translation := input.ModelTranslation
+	modelConfig := input.ResolvedModelConfig.Config
+	if modelConfig == nil {
+		return nil, fmt.Errorf("resolved ModelConfig configuration is required")
+	}
+	model, data, err := renderModel(input.ResolvedModelConfig)
+	if err != nil {
+		return nil, fmt.Errorf("render ModelConfig %q: %w", modelConfig.Name, err)
+	}
 	runtimeModel := &modelRuntime{
-		Model: translation.Model, Environment: translation.Environment,
-		HasUnsupportedVolumes: len(translation.Volumes) > 0 || len(translation.VolumeMounts) > 0,
-		data:                  &modelDeploymentData{EnvVars: translation.Environment, Volumes: translation.Volumes, VolumeMounts: translation.VolumeMounts},
+		Model: model, Environment: data.EnvVars,
+		HasUnsupportedVolumes: len(data.Volumes) > 0 || len(data.VolumeMounts) > 0,
+		data:                  data,
 	}
 	if runtimeModel.HasUnsupportedVolumes {
 		return nil, v2translator.NewValidationError("ModelConfig requires volume mounts unsupported by Substrate ActorTemplate")
@@ -164,9 +171,9 @@ func (c *Compiler) compileAgent(ctx context.Context, input *v2translator.AgentIn
 		return nil, v2translator.NewValidationError("resolved model or MCP configuration requires volume mounts unsupported by Substrate ActorTemplate")
 	}
 	result := &compiledAgent{
-		config: cfg, models: []*v1alpha3.ModelConfig{input.ModelConfig}, templates: []*v1alpha3.AgentTemplate{input.Template},
+		config: cfg, models: []*v1alpha3.ModelConfig{modelConfig}, templates: []*v1alpha3.AgentTemplate{input.Template},
 		environment: runtimeModel.Environment,
-		egress:      append(agentConfigDestinations(cfg, input.ModelConfig, runtimeModel.Model), agentPluginSourceDestinations(pluginConfig)...),
+		egress:      append(agentConfigDestinations(cfg, modelConfig, runtimeModel.Model), agentPluginSourceDestinations(pluginConfig)...),
 	}
 	for _, binding := range input.Shared {
 		child, err := c.compileAgent(ctx, binding.Agent)

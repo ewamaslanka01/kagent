@@ -1,7 +1,6 @@
 package kagent
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -16,7 +15,6 @@ import (
 	"github.com/kagent-dev/kagent/go/core/pkg/env"
 	v2translator "github.com/kagent-dev/kagent/go/core/v2/translator"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/types"
 )
 
 // modelDeploymentData collects the Kubernetes inputs required by a provider.
@@ -37,22 +35,6 @@ type modelRuntime struct {
 	Environment           []corev1.EnvVar
 	HasUnsupportedVolumes bool
 	data                  *modelDeploymentData
-}
-
-var _ v2translator.HarnessCompiler = (*Compiler)(nil)
-
-type ModelCompiler struct{ kube v2translator.Reader }
-
-func NewModelCompiler(kube v2translator.Reader) *ModelCompiler {
-	return &ModelCompiler{kube: kube}
-}
-
-func (c *ModelCompiler) TranslateModel(ctx context.Context, config *v1alpha3.ModelConfig) (*v2translator.ModelConfigTranslation, error) {
-	model, data, err := c.translateModel(ctx, config)
-	if err != nil {
-		return nil, err
-	}
-	return &v2translator.ModelConfigTranslation{Model: model, Environment: data.EnvVars, Volumes: data.Volumes, VolumeMounts: data.VolumeMounts}, nil
 }
 
 const (
@@ -207,36 +189,15 @@ func addTokenExchangeConfiguration(openai *adk.OpenAI, mdd *modelDeploymentData,
 	}
 }
 
-// resolveFoundryEndpoint returns the Foundry endpoint, preferring the inline
-// value and otherwise resolving it from the referenced ConfigMap (endpointFrom),
-// which lets Azure Service Operator own the account endpoint.
-func (c *ModelCompiler) resolveFoundryEndpoint(ctx context.Context, namespace string, cfg *v1alpha3.FoundryConfig) (string, error) {
-	if cfg.Endpoint != "" {
-		return cfg.Endpoint, nil
-	}
-	if cfg.EndpointFrom == nil {
-		return "", nil
-	}
-	ref := cfg.EndpointFrom
-	cm := &corev1.ConfigMap{}
-	if err := c.kube.Get(ctx, types.NamespacedName{Namespace: namespace, Name: ref.Name}, cm); err != nil {
-		return "", fmt.Errorf("failed to get Foundry endpoint config map %s: %w", ref.Name, err)
-	}
-	value, ok := cm.Data[ref.Key]
-	if !ok {
-		if ref.Optional != nil && *ref.Optional {
-			return "", nil
-		}
-		return "", fmt.Errorf("the Foundry endpoint config map %s does not contain key %q", ref.Name, ref.Key)
-	}
-	return value, nil
-}
-
 // translateModel owns the v2 ModelConfig-to-ADK mapping. The provider branches
 // are intentionally local rather than calling the legacy translator: v2 can
 // now evolve and eventually replace that code without a compatibility layer.
 // It returns the ADK wire model and its Kubernetes runtime requirements.
-func (c *ModelCompiler) translateModel(ctx context.Context, model *v1alpha3.ModelConfig) (adk.Model, *modelDeploymentData, error) {
+func renderModel(resolved *v2translator.ResolvedModelConfig) (adk.Model, *modelDeploymentData, error) {
+	if resolved == nil || resolved.Config == nil {
+		return nil, nil, fmt.Errorf("resolved model config is required")
+	}
+	model := resolved.Config
 	modelDeploymentData := &modelDeploymentData{}
 
 	// Add TLS configuration if present
@@ -549,12 +510,8 @@ func (c *ModelCompiler) translateModel(ctx context.Context, model *v1alpha3.Mode
 		// If AWS_BEARER_TOKEN_BEDROCK key exists: use bearer token auth
 		// Otherwise, use IAM credentials
 		if !model.Spec.APIKeyPassthrough && model.Spec.APIKeySecret != "" {
-			secret := &corev1.Secret{}
-			if err := c.kube.Get(ctx, types.NamespacedName{Namespace: model.Namespace, Name: model.Spec.APIKeySecret}, secret); err != nil {
-				return nil, nil, fmt.Errorf("failed to get Bedrock credentials secret: %w", err)
-			}
-
-			if _, hasBearerToken := secret.Data[env.AWSBearerTokenBedrock.Name()]; hasBearerToken {
+			switch resolved.BedrockAuthentication {
+			case v2translator.BedrockAuthenticationBearer:
 				modelDeploymentData.EnvVars = append(modelDeploymentData.EnvVars, corev1.EnvVar{
 					Name: env.AWSBearerTokenBedrock.Name(),
 					ValueFrom: &corev1.EnvVarSource{
@@ -566,7 +523,7 @@ func (c *ModelCompiler) translateModel(ctx context.Context, model *v1alpha3.Mode
 						},
 					},
 				})
-			} else {
+			case v2translator.BedrockAuthenticationIAM:
 				modelDeploymentData.EnvVars = append(modelDeploymentData.EnvVars, corev1.EnvVar{
 					Name: env.AWSAccessKeyID.Name(),
 					ValueFrom: &corev1.EnvVarSource{
@@ -589,16 +546,13 @@ func (c *ModelCompiler) translateModel(ctx context.Context, model *v1alpha3.Mode
 						},
 					},
 				})
-				// AWS_SESSION_TOKEN is optional, only needed for temporary/SSO credentials
-				if _, hasSessionToken := secret.Data[env.AWSSessionToken.Name()]; hasSessionToken {
+				if resolved.BedrockSessionToken {
 					modelDeploymentData.EnvVars = append(modelDeploymentData.EnvVars, corev1.EnvVar{
 						Name: env.AWSSessionToken.Name(),
 						ValueFrom: &corev1.EnvVarSource{
 							SecretKeyRef: &corev1.SecretKeySelector{
-								LocalObjectReference: corev1.LocalObjectReference{
-									Name: model.Spec.APIKeySecret,
-								},
-								Key: env.AWSSessionToken.Name(),
+								LocalObjectReference: corev1.LocalObjectReference{Name: model.Spec.APIKeySecret},
+								Key:                  env.AWSSessionToken.Name(),
 							},
 						},
 					})
@@ -642,11 +596,6 @@ func (c *ModelCompiler) translateModel(ctx context.Context, model *v1alpha3.Mode
 		}
 
 		if !model.Spec.APIKeyPassthrough && model.Spec.APIKeySecret != "" {
-			secret := &corev1.Secret{}
-			if err := c.kube.Get(ctx, types.NamespacedName{Namespace: model.Namespace, Name: model.Spec.APIKeySecret}, secret); err != nil {
-				return nil, nil, fmt.Errorf("failed to get SAP AI Core credentials secret: %w", err)
-			}
-
 			modelDeploymentData.EnvVars = append(modelDeploymentData.EnvVars, corev1.EnvVar{
 				Name: env.SAPAICoreClientID.Name(),
 				ValueFrom: &corev1.EnvVarSource{
@@ -693,10 +642,7 @@ func (c *ModelCompiler) translateModel(ctx context.Context, model *v1alpha3.Mode
 
 		// Resolve the endpoint, which may come from an inline value or from a
 		// ConfigMap written by Azure Service Operator (endpointFrom).
-		endpoint, err := c.resolveFoundryEndpoint(ctx, model.Namespace, cfg)
-		if err != nil {
-			return nil, nil, err
-		}
+		endpoint := resolved.FoundryEndpoint
 		if endpoint == "" {
 			return nil, nil, fmt.Errorf("foundry endpoint could not be resolved: set foundry.endpoint or a foundry.endpointFrom whose ConfigMap key exists")
 		}

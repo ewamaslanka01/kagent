@@ -7,7 +7,6 @@ import (
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	kagentv1alpha3 "github.com/kagent-dev/kagent/go/api/v1alpha3"
 	v2translator "github.com/kagent-dev/kagent/go/core/v2/translator"
-	kagenttranslator "github.com/kagent-dev/kagent/go/core/v2/translator/kagent"
 	"istio.io/istio/pkg/kube/controllers"
 	"istio.io/istio/pkg/kube/krt"
 	corev1 "k8s.io/api/core/v1"
@@ -29,12 +28,12 @@ type collectionReader struct {
 	workerPools      krt.Collection[*atev1alpha1.WorkerPool]
 }
 
-func (r collectionReader) GetModelConfigTranslation(ctx context.Context, key types.NamespacedName) (*v2translator.ModelConfigTranslation, error) {
+func (r collectionReader) GetResolvedModelConfig(ctx context.Context, key types.NamespacedName) (*v2translator.ResolvedModelConfig, error) {
 	modelConfig := krt.FetchOne(r.ctx, r.modelConfigs, krt.FilterObjectName(key))
 	if modelConfig == nil {
 		return nil, fmt.Errorf("ModelConfig %s does not exist", key)
 	}
-	return kagenttranslator.NewModelCompiler(r).TranslateModel(ctx, *modelConfig)
+	return v2translator.ResolveModelConfig(ctx, r, *modelConfig)
 }
 
 func (r collectionReader) Get(_ context.Context, key types.NamespacedName, object runtime.Object) error {

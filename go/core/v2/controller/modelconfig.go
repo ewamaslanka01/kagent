@@ -10,7 +10,6 @@ import (
 
 	kagentv1alpha3 "github.com/kagent-dev/kagent/go/api/v1alpha3"
 	v2translator "github.com/kagent-dev/kagent/go/core/v2/translator"
-	kagenttranslator "github.com/kagent-dev/kagent/go/core/v2/translator/kagent"
 	"istio.io/istio/pkg/kube/krt"
 	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
@@ -22,7 +21,7 @@ type ModelConfigReconciliation struct {
 	ModelConfigName krt.Named
 	// If Translation is nil, Failure is non-nil and describes why the ModelConfig could not be translated.
 	// note that failure may be not nil even if Translation is non-nil.
-	Translation *v2translator.ModelConfigTranslation
+	Translation *v2translator.ResolvedModelConfig
 }
 
 func (r ModelConfigReconciliation) Equals(other ModelConfigReconciliation) bool {
@@ -48,7 +47,7 @@ func newModelConfigReconciliations(
 	statuses, _ := krt.NewStatusCollection(modelConfigs, func(ctx krt.HandlerContext, modelConfig *kagentv1alpha3.ModelConfig) (*kagentv1alpha3.ModelConfigStatus, *ModelConfigReconciliation) {
 		state := &ModelConfigReconciliation{ModelConfigName: krt.Named{Namespace: modelConfig.Namespace, Name: modelConfig.Name}}
 		reader := collectionReader{ctx: ctx, configMaps: configMaps, secrets: secrets, modelConfigs: modelConfigs}
-		translation, translationErr := kagenttranslator.NewModelCompiler(reader).TranslateModel(context.Background(), modelConfig)
+		translation, translationErr := v2translator.ResolveModelConfig(context.Background(), reader, modelConfig)
 		var acceptanceFailure *ReconciliationFailure
 		if translationErr != nil {
 			acceptanceFailure = &ReconciliationFailure{Condition: kagentv1alpha3.ModelConfigConditionTypeAccepted, Reason: "TranslationFailed", Message: translationErr.Error()}
