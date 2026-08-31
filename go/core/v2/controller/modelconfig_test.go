@@ -97,3 +97,71 @@ func TestModelConfigReconciliationMissingAPIKeySecretKey(t *testing.T) {
 		t.Fatalf("expected ResolvedRefs condition with Status=False and Reason=APIKeySecretKeyNotFound, got: %+v", resolvedRefsCond)
 	}
 }
+
+func TestModelConfigReconciliationValidatesEffectiveProviderReferences(t *testing.T) {
+	tests := []struct {
+		name           string
+		spec           kagentv1alpha3.ModelConfigSpec
+		secret         *corev1.Secret
+		configMap      *corev1.ConfigMap
+		expectedReason string
+	}{
+		{
+			name: "TLS CA key", spec: kagentv1alpha3.ModelConfigSpec{
+				Model: "gpt-5", Provider: kagentv1alpha3.ModelProviderOpenAI,
+				TLS: &kagentv1alpha3.TLSConfig{CACertSecretRef: "ca", CACertSecretKey: "ca.pem"},
+			}, secret: &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "ca"}}, expectedReason: "TLSSecretKeyNotFound",
+		},
+		{
+			name: "SAP credentials", spec: kagentv1alpha3.ModelConfigSpec{
+				Model: "gpt-5", Provider: kagentv1alpha3.ModelProviderSAPAICore,
+				SAPAICore: &kagentv1alpha3.SAPAICoreConfig{BaseURL: "https://sap.example.com"}, APIKeySecret: "credentials",
+			}, secret: &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "credentials"}, Data: map[string][]byte{"client_id": []byte("id")}}, expectedReason: "SAPAICoreCredentialKeyNotFound",
+		},
+		{
+			name: "Bedrock IAM credentials", spec: kagentv1alpha3.ModelConfigSpec{
+				Model: "claude", Provider: kagentv1alpha3.ModelProviderBedrock,
+				Bedrock: &kagentv1alpha3.BedrockConfig{Region: "us-east-1"}, APIKeySecret: "credentials",
+			}, secret: &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "credentials"}, Data: map[string][]byte{"AWS_ACCESS_KEY_ID": []byte("access")}}, expectedReason: "BedrockCredentialKeyNotFound",
+		},
+		{
+			name: "Foundry endpoint", spec: kagentv1alpha3.ModelConfigSpec{
+				Model: "gpt-5", Provider: kagentv1alpha3.ModelProviderFoundry,
+				Foundry: &kagentv1alpha3.FoundryConfig{Deployment: "chat", EndpointFrom: &corev1.ConfigMapKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "account"}, Key: "endpoint"}},
+			}, configMap: &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "account"}}, expectedReason: "EndpointConfigMapKeyNotFound",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stop := make(chan struct{})
+			t.Cleanup(func() { close(stop) })
+			opts := krt.NewOptionsBuilder(stop, "test", nil)
+			modelConfigs := krt.NewStaticCollection(nil, []*kagentv1alpha3.ModelConfig{{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "model"}, Spec: test.spec,
+			}}, opts.WithName("ModelConfigs")...)
+			secrets := make([]*corev1.Secret, 0, 1)
+			if test.secret != nil {
+				secrets = append(secrets, test.secret)
+			}
+			configMaps := make([]*corev1.ConfigMap, 0, 1)
+			if test.configMap != nil {
+				configMaps = append(configMaps, test.configMap)
+			}
+			secretCollection := krt.NewStaticCollection(nil, secrets, opts.WithName("Secrets")...)
+			configMapCollection := krt.NewStaticCollection(nil, configMaps, opts.WithName("ConfigMaps")...)
+			reconciliations := newModelConfigReconciliations(modelConfigs, configMapCollection, secretCollection, opts)
+
+			waitFor(t, func() bool { return len(reconciliations.List()) == 1 })
+			status := reconciliations.List()[0].Status
+			accepted := apimeta.FindStatusCondition(status.Conditions, kagentv1alpha3.ModelConfigConditionTypeAccepted)
+			if accepted == nil || accepted.Status != metav1.ConditionTrue {
+				t.Fatalf("expected Accepted=True, got: %+v", accepted)
+			}
+			resolvedRefs := apimeta.FindStatusCondition(status.Conditions, kagentv1alpha3.ModelConfigConditionTypeResolvedRefs)
+			if resolvedRefs == nil || resolvedRefs.Status != metav1.ConditionFalse || resolvedRefs.Reason != test.expectedReason {
+				t.Fatalf("expected ResolvedRefs=False with Reason=%q, got: %+v", test.expectedReason, resolvedRefs)
+			}
+		})
+	}
+}

@@ -143,7 +143,7 @@ func TestResolveModelConfigExposesResolvedFoundryEndpoint(t *testing.T) {
 	require.Equal(t, model.Spec, resolved.Config.Spec)
 	require.Equal(t, configMap.Data["endpoint"], resolved.FoundryEndpoint)
 	require.Equal(t, []v2translator.ModelConfigReference{{
-		NamespacedName: types.NamespacedName{Namespace: "test", Name: "account"}, Key: "endpoint",
+		NamespacedName: types.NamespacedName{Namespace: "test", Name: "account"}, Kind: "ConfigMap", Key: "endpoint",
 	}}, resolved.References)
 }
 

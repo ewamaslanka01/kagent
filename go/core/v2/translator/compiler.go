@@ -9,6 +9,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // Compiler resolves public API objects into a complete, immutable runtime
@@ -200,6 +201,12 @@ func (c *Compiler) buildInputs(ctx context.Context, tree *ResolvedTree) (*Harnes
 		input.ResolvedModelConfig, err = c.kube.GetResolvedModelConfig(ctx, types.NamespacedName{Namespace: template.Namespace, Name: template.Spec.ModelConfig.Name})
 		if err != nil {
 			return nil, fmt.Errorf("resolve ModelConfig %q: %w", template.Spec.ModelConfig.Name, err)
+		}
+		for _, failure := range input.ResolvedModelConfig.SemanticFailures {
+			ctrllog.FromContext(ctx).Info("ModelConfig has invalid configuration", "modelConfig", template.Spec.ModelConfig.Name, "reason", failure.Reason, "message", failure.Message)
+		}
+		for _, failure := range input.ResolvedModelConfig.ReferenceFailures {
+			ctrllog.FromContext(ctx).Info("ModelConfig has unresolved reference", "modelConfig", template.Spec.ModelConfig.Name, "reason", failure.Reason, "message", failure.Message)
 		}
 		toolNames := make([]string, 0)
 		for _, tool := range template.Spec.Tools {

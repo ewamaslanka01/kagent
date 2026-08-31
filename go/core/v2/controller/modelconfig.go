@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"slices"
 	"strings"
 
@@ -14,7 +13,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 )
 
 type ModelConfigReconciliation struct {
@@ -47,48 +45,39 @@ func newModelConfigReconciliations(
 	statuses, _ := krt.NewStatusCollection(modelConfigs, func(ctx krt.HandlerContext, modelConfig *kagentv1alpha3.ModelConfig) (*kagentv1alpha3.ModelConfigStatus, *ModelConfigReconciliation) {
 		state := &ModelConfigReconciliation{ModelConfigName: krt.Named{Namespace: modelConfig.Namespace, Name: modelConfig.Name}}
 		reader := collectionReader{ctx: ctx, configMaps: configMaps, secrets: secrets, modelConfigs: modelConfigs}
-		translation, translationErr := v2translator.ResolveModelConfig(context.Background(), reader, modelConfig)
-		var acceptanceFailure *ReconciliationFailure
-		if translationErr != nil {
-			acceptanceFailure = &ReconciliationFailure{Condition: kagentv1alpha3.ModelConfigConditionTypeAccepted, Reason: "TranslationFailed", Message: translationErr.Error()}
-		} else {
-			state.Translation = translation
+		translation, err := v2translator.ResolveModelConfig(context.Background(), reader, modelConfig)
+		if err != nil {
+			return nil, nil
 		}
 		var resolvedRefsFailure *ReconciliationFailure
 		var values []hashValue
-		addSecret := func(name, keyName, notFoundReason, keyNotFoundReason string) {
-			key := types.NamespacedName{Namespace: modelConfig.Namespace, Name: name}
-			secret := krt.FetchOne(ctx, secrets, krt.FilterObjectName(key))
-			if secret == nil {
-				resolvedRefsFailure = appendModelConfigFailure(resolvedRefsFailure, kagentv1alpha3.ModelConfigConditionTypeResolvedRefs, notFoundReason, fmt.Sprintf("secret %s not found", name))
-				return
-			}
-			if keyName != "" {
-				if _, ok := (*secret).Data[keyName]; !ok {
-					resolvedRefsFailure = appendModelConfigFailure(resolvedRefsFailure, kagentv1alpha3.ModelConfigConditionTypeResolvedRefs, keyNotFoundReason, fmt.Sprintf("secret %s does not contain key %q", name, keyName))
+		var acceptanceFailure *ReconciliationFailure
+		if len(translation.SemanticFailures) > 0 {
+			failure := translation.SemanticFailures[0]
+			acceptanceFailure = &ReconciliationFailure{Condition: kagentv1alpha3.ModelConfigConditionTypeAccepted, Reason: failure.Reason, Message: failure.Message}
+		}
+		if len(translation.ReferenceFailures) > 0 {
+			failure := translation.ReferenceFailures[0]
+			resolvedRefsFailure = &ReconciliationFailure{Condition: kagentv1alpha3.ModelConfigConditionTypeResolvedRefs, Reason: failure.Reason, Message: failure.Message}
+		}
+		state.Translation = translation
+		seenSecrets := map[string]struct{}{}
+		for _, reference := range translation.References {
+			switch reference.Kind {
+			case "Secret":
+				if _, seen := seenSecrets[reference.NamespacedName.String()]; seen {
+					continue
 				}
-			}
-			values = append(values, hashValue{key: key.String(), data: (*secret).Data})
-		}
-
-		if modelConfig.Spec.APIKeySecret != "" {
-			addSecret(modelConfig.Spec.APIKeySecret, modelConfig.Spec.APIKeySecretKey, "APIKeySecretNotFound", "APIKeySecretKeyNotFound")
-		}
-		if tls := modelConfig.Spec.TLS; tls != nil && tls.CACertSecretRef != "" {
-			addSecret(tls.CACertSecretRef, "", "TLSSecretNotFound", "")
-		}
-		if foundry := modelConfig.Spec.Foundry; foundry != nil && foundry.EndpointFrom != nil {
-			ref := foundry.EndpointFrom
-			key := types.NamespacedName{Namespace: modelConfig.Namespace, Name: ref.Name}
-			configMap := krt.FetchOne(ctx, configMaps, krt.FilterObjectName(key))
-			if configMap == nil {
-				resolvedRefsFailure = appendModelConfigFailure(resolvedRefsFailure, kagentv1alpha3.ModelConfigConditionTypeResolvedRefs, "EndpointConfigMapNotFound", fmt.Sprintf("config map %s not found", ref.Name))
-			} else {
-				value, ok := (*configMap).Data[ref.Key]
-				if !ok && (ref.Optional == nil || !*ref.Optional) {
-					resolvedRefsFailure = appendModelConfigFailure(resolvedRefsFailure, kagentv1alpha3.ModelConfigConditionTypeResolvedRefs, "EndpointConfigMapKeyNotFound", fmt.Sprintf("config map %s does not contain key %q", ref.Name, ref.Key))
+				secret := krt.FetchOne(ctx, secrets, krt.FilterObjectName(reference.NamespacedName))
+				if secret != nil {
+					values = append(values, hashValue{key: reference.NamespacedName.String(), data: (*secret).Data})
+					seenSecrets[reference.NamespacedName.String()] = struct{}{}
 				}
-				values = append(values, hashValue{key: key.String(), data: map[string][]byte{ref.Key: []byte(value)}})
+			case "ConfigMap":
+				configMap := krt.FetchOne(ctx, configMaps, krt.FilterObjectName(reference.NamespacedName))
+				if configMap != nil {
+					values = append(values, hashValue{key: reference.NamespacedName.String(), data: map[string][]byte{reference.Key: []byte((*configMap).Data[reference.Key])}})
+				}
 			}
 		}
 
