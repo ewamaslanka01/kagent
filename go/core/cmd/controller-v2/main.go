@@ -95,14 +95,6 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	reconciler, err := v2controller.NewReconciler(kubeConfig, runtime.Collections, store)
-	if err != nil {
-		log.Fatal(err)
-	}
-	if err := manager.Add(reconciler); err != nil {
-		log.Fatalf("add reconciler to controller manager: %v", err)
-	}
-
 	actors, err := substrate.Dial(ctx, substrate.Config{
 		AteAPIEndpoint: env("SUBSTRATE_ATE_API_ENDPOINT", "dns:///api.ate-system.svc:443"),
 		CAFile:         os.Getenv("SUBSTRATE_ATE_API_CA_FILE"),
@@ -113,6 +105,13 @@ func main() {
 		log.Fatal(err)
 	}
 	defer actors.Close()
+	reconciler, err := v2controller.NewReconciler(kubeConfig, runtime.Collections, store, actors)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := manager.Add(reconciler); err != nil {
+		log.Fatalf("add reconciler to controller manager: %v", err)
+	}
 
 	authenticator := &authimpl.UnsecureAuthenticator{}
 	authorizer := &authimpl.NoopAuthorizer{}
